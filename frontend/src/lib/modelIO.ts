@@ -1,37 +1,63 @@
-
+// frontend/src/lib/modelIO.ts
 import { HTTP_URL } from './config';
-import { parse as parseYaml } from 'yaml';
 
-export function parseModel(text: string): any {
-  // YAML first, then JSON
-  try { return parseYaml(text); }
-  catch {
-    try { return JSON.parse(text); }
-    catch { throw new Error('Model is not valid YAML/JSON'); }
+/**
+ * Wysyła model do backendu. Jeśli `text` nie podano, pobiera z textarea #model-editor.
+ * Akceptuje JSON lub YAML — backend sam rozpozna.
+ */
+export async function apiLoadModel(text?: string): Promise<void> {
+  try {
+    let payload = text;
+    if (!payload) {
+      const ta = document.getElementById('model-editor') as HTMLTextAreaElement | null;
+      if (!ta) throw new Error('Model editor not found (#model-editor).');
+      payload = ta.value;
+    }
+    const res = await fetch(`${HTTP_URL}/api/load`, {
+      method: 'POST',
+      // wysyłamy jako zwykły tekst — backend ma parser JSON/YAML dla text/*
+      headers: { 'Content-Type': 'text/plain' },
+      body: payload,
+    });
+    if (!res.ok) {
+      const err = await safeJson(res);
+      throw new Error(`Load failed: ${res.status} ${err?.error ?? ''}`);
+    }
+    console.log('[MODEL] loaded');
+  } catch (e) {
+    console.error(e);
+    alert((e as Error).message || 'Load model failed');
   }
 }
 
-export async function apiLoadModelFromText(text: string) {
-  const payload = parseModel(text);
-  const res = await fetch(`${HTTP_URL}/api/load`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) throw new Error(`Load failed: ${res.status}`);
-  return await res.json();
+export async function apiStart(): Promise<void> {
+  await simplePost('/api/start');
+}
+export async function apiPause(): Promise<void> {
+  await simplePost('/api/pause');
+}
+export async function apiReset(): Promise<void> {
+  await simplePost('/api/reset');
 }
 
-export async function apiStart() { return fetch(`${HTTP_URL}/api/start`, { method:'POST' }); }
-export async function apiPause() { return fetch(`${HTTP_URL}/api/pause`, { method:'POST' }); }
-export async function apiReset() { return fetch(`${HTTP_URL}/api/reset`, { method:'POST' }); }
+/** Ustawienie parametru komponentu z UI (opcjonalnie używane w Inspectorze) */
+export async function apiSetParam(id: string, key: string, value: any): Promise<void> {
+  await simplePost('/api/setParam', { id, key, value });
+}
 
-export async function apiSetParam(id: string, key: string, value: any) {
-  const res = await fetch(`${HTTP_URL}/api/setParam`, {
+// ---------- helpers ----------
+async function simplePost(path: string, body?: any) {
+  const res = await fetch(`${HTTP_URL}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, key, value })
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`setParam failed: ${res.status}`);
-  return await res.json();
+  if (!res.ok) {
+    const err = await safeJson(res);
+    throw new Error(`${path} failed: ${res.status} ${err?.error ?? ''}`);
+  }
+}
+
+async function safeJson(res: Response) {
+  try { return await res.json(); } catch { return null; }
 }
