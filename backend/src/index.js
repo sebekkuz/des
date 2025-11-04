@@ -26,23 +26,42 @@ function wsBroadcast(obj){ if(!_wss) return; const msg=JSON.stringify(obj); _wss
 
 app.get('/api/health', (req,res)=>res.json({ok:true}));
 
-app.post('/api/load', (req,res)=>{
-  try{
-    let src=req.body;
-    if (typeof src === 'string') { try{ src=JSON.parse(src);} catch{ src=parseYaml(src);} }
-    const modelDef=loadModel(src);
-    if (engine){ engine.pause(); engine.reset(); }
+app.post('/api/load', (req, res) => {
+  try {
+    let src = req.body;
+    if (typeof src === 'string') {
+      try { src = JSON.parse(src); }
+      catch { src = parseYaml(src); }
+    }
+
+    const modelDef = loadModel(src); // może rzucić błąd
+
+    // BEZPIECZNIE: nie zakładaj, że poprzedni "engine" ma metody
+    if (engine && typeof engine.pause === 'function') {
+      try { engine.pause(); } catch {}
+      if (typeof engine.reset === 'function') {
+        try { engine.reset(); } catch {}
+      }
+    }
+
     engine = new Engine({
-      onState:  (state)=>wsBroadcast({type:'STATE', ...state}),
-      onMetric: (series)=>wsBroadcast({type:'METRIC', series}),
-      onLog:    (entry)=>wsBroadcast({type:'LOG', ...entry}),
-      onError:  (err)=>wsBroadcast({type:'ERROR', msg:String(err)}),
-      onEntityMove:(m)=>wsBroadcast({type:'ENTITY_MOVE', ...m}),
+      onState:  (state)  => wsBroadcast({ type:'STATE', ...state }),
+      onMetric: (series) => wsBroadcast({ type:'METRIC', series }),
+      onLog:    (entry)  => wsBroadcast({ type:'LOG', ...entry }),
+      onError:  (err)    => wsBroadcast({ type:'ERROR', msg:String(err) }),
+      onEntityMove: (m)  => wsBroadcast({ type:'ENTITY_MOVE', ...m }),
     });
+
     engine.loadModel(modelDef);
-    wsBroadcast({type:'LOG', level:'info', msg:'Model loaded', at:Date.now()});
-    res.json({ok:true});
-  }catch(e){ console.error('[LOAD]', e); res.status(422).json({error:String(e?.message||e)}); }
+    wsBroadcast({ type:'LOG', level:'info', msg:'Model loaded', at:Date.now() });
+    return res.json({ ok: true });
+
+  } catch (e) {
+    const msg = String(e?.message || e);
+    console.error('[LOAD]', msg);
+    // 422 dla błędów walidacji/modelu
+    return res.status(422).json({ error: msg });
+  }
 });
 
 app.post('/api/setParam', (req,res)=>{
