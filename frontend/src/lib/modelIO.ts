@@ -25,3 +25,13 @@ export async function apiLoadModelFromText(text: string) {
 export async function apiStart() { return fetch(`${HTTP_URL}/api/start`, { method:'POST' }); }
 export async function apiPause() { return fetch(`${HTTP_URL}/api/pause`, { method:'POST' }); }
 export async function apiReset() { return fetch(`${HTTP_URL}/api/reset`, { method:'POST' }); }
+
+export async function apiSetParam(id: string, key: string, value: any) {
+  const res = await fetch(`${HTTP_URL}/api/setParam`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, key, value })
+  });
+  if (!res.ok) throw new Error(`setParam failed: ${res.status}`);
+  return await res.json();
+}
