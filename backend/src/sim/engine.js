@@ -1,6 +1,8 @@
 
-// backend/src/sim/engine.js
+// backend/src/sim/engine.js (ETAP 1: QC + Rework + conditional routing)
 import { EventQueue } from './eventQueue.js';
+import { QualityCheck } from './components/QualityCheck.js';
+import { Rework } from './components/Rework.js';
 
 function mulberry32(seed) {
   let t = seed >>> 0;
@@ -51,19 +53,23 @@ export class Engine {
     this._tickHandle = null;
 
     this.model = null;
-    this.stopAt = null;
+    this.stopAt = 3600;
     this.rng = Math.random;
     this.metrics = { throughput: 0 };
 
+    // graph/model
     this.defs = new Map();
-    this.links = [];
-    this.adj = new Map();
-    this.rev = new Map();
+    this.links = [];          // {from,to,condition?}
+    this.adj = new Map();     // from -> [to,...]
+    this.rev = new Map();     // to -> [from,...]
     this.sinks = new Set();
-    this.generators = [];
+    this.generators = [];     // { id, interarrivalDist }
 
+    // component states
     this.buffers = new Map();      // id -> {cap,q}
     this.workstations = new Map(); // id -> {busy,m,svcDist,inQ}
+    this.quality = new Map();      // id -> QualityCheck
+    this.reworks = new Map();      // id -> Rework
   }
 
   loadModel(model) {
@@ -73,13 +79,16 @@ export class Engine {
     const globals = this.model?.globals || {};
     const seed = Number(globals?.rng?.seed ?? 1);
     this.rng = mulberry32(seed);
-
-    this.stopAt = Number(globals?.stopCondition?.time ?? NaN);
-    if (!Number.isFinite(this.stopAt) || this.stopAt <= 0) this.stopAt = 3600;
+    const stopT = Number(globals?.stopCondition?.time ?? 3600);
+    this.stopAt = Number.isFinite(stopT) && stopT > 0 ? stopT : 3600;
 
     const define = this.model?.define || {};
-    const links = Array.isArray(this.model?.links) ? this.model.links : [];
-    this.links = links.map(l => ({ from: String(l.from), to: String(l.to) }));
+    const rawLinks = Array.isArray(this.model?.links) ? this.model.links : [];
+    this.links = rawLinks.map(l => ({
+      from: String(l.from),
+      to: String(l.to),
+      condition: l.condition && typeof l.condition === 'object' ? l.condition : null
+    }));
 
     this.adj.clear(); this.rev.clear(); this.defs.clear();
     for (const [id, def] of Object.entries(define)) this.defs.set(id, def);
@@ -90,9 +99,12 @@ export class Engine {
       this.rev.get(to).push(from);
     }
 
+    // components
     this.sinks.clear();
     this.buffers.clear();
     this.workstations.clear();
+    this.quality.clear();
+    this.reworks.clear();
     for (const [id, def] of Object.entries(define)) {
       const type = String(def.type);
       const inputs = def.inputs || {};
@@ -106,16 +118,19 @@ export class Engine {
         const m = Number(inputs.m ?? 1);
         this.workstations.set(id, { busy: 0, m, svcDist, inQ: 0 });
       }
+      if (type === 'QualityCheck') this.quality.set(id, new QualityCheck(inputs));
+      if (type === 'Rework') this.reworks.set(id, new Rework(inputs));
     }
 
+    // generators
     this.generators = [];
     for (const [id, def] of Object.entries(define)) {
       if (String(def.type) !== 'EntityGenerator') continue;
       const inputs = def.inputs || {};
       const it = inputs.InterarrivalTime;
-      const inter = it && it.dist ? it.dist : 1;
+      const inter = it && it.dist ? it.dist : { type:'Exponential', mean: 1 };
       if (!this._hasPathToSink(id)) {
-        this.onLog({ level: 'warn', msg: `Generator ${id} nie ma ścieżki do SNK`, at: Date.now() });
+        this.onLog({ level:'warn', msg:`Generator ${id} nie ma ścieżki do SNK`, at:Date.now() });
         continue;
       }
       this.generators.push({ id, interarrivalDist: inter });
@@ -127,21 +142,37 @@ export class Engine {
       this.eq.push(t, () => this._onArrival(g));
     }
 
-    this.onLog({ level: 'info', msg: `Model loaded. Generators: ${this.generators.length}, stopAt=${this.stopAt}s`, at: Date.now() });
+    this.onLog({ level:'info', msg:`Model loaded. Generators: ${this.generators.length}, stopAt=${this.stopAt}s`, at:Date.now() });
     this._emitState();
   }
 
   _hasPathToSink(startId) {
-    const stack = [startId]; const seen = new Set();
+    const stack = [startId], seen = new Set();
     while (stack.length) {
-      const cur = stack.pop(); if (!cur || seen.has(cur)) continue; seen.add(cur);
+      const cur = stack.pop();
+      if (!cur || seen.has(cur)) continue;
+      seen.add(cur);
       if (this.sinks.has(cur)) return true;
-      const nxt = this.adj.get(cur) || []; for (const n of nxt) stack.push(n);
+      for (const n of (this.adj.get(cur) || [])) stack.push(n);
     }
     return false;
   }
 
-  // flow
+  _firstNext(id) {
+    const arr = this.adj.get(id) || [];
+    return arr.length ? arr[0] : null;
+  }
+
+  _nextByCondition(fromId, outcome) {
+    for (const l of this.links) {
+      if (l.from === fromId && l.condition && String(l.condition.expr) === String(outcome)) {
+        return l.to;
+      }
+    }
+    return null;
+  }
+
+  // ---- FLOW ----
   _onArrival(g) {
     const next = this._firstNext(g.id);
     if (next) this._pushTo(next);
@@ -157,21 +188,46 @@ export class Engine {
       this.metrics.throughput += 1;
       return;
     }
+
     if (type === 'Buffer') {
-      const b = this.buffers.get(id); const cap = b?.cap ?? Infinity;
+      const b = this.buffers.get(id);
+      const cap = b?.cap ?? Infinity;
       if (b) {
         if (b.q < cap) { b.q++; this._tryPushingFromBuffer(id); }
         else this.onLog({ level:'warn', msg:`Buffer ${id} full (q=${b.q}/${cap})`, at:Date.now() });
       } else {
-        const next = this._firstNext(id); if (next) this._pushTo(next);
+        const nx = this._firstNext(id); if (nx) this._pushTo(nx);
       }
       return;
     }
+
     if (type === 'Workstation') {
       const ws = this.workstations.get(id); if (!ws) return;
       ws.inQ++; this._tryStartService(id); return;
     }
-    const next = this._firstNext(id); if (next) this._pushTo(next);
+
+    if (type === 'QualityCheck') {
+      const qc = this.quality.get(id);
+      const outcome = qc ? qc.decide(this.rng) : 'ok';
+      const condNext = this._nextByCondition(id, outcome);
+      const nx = condNext || this._firstNext(id);
+      if (nx) this._pushTo(nx);
+      return;
+    }
+
+    if (type === 'Rework') {
+      const rw = this.reworks.get(id);
+      const dt = sampleDist(rw?.serviceDist, this.rng) || 0;
+      this.eq.push(this.simTime + dt, () => {
+        if (rw) rw.completed++;
+        const nx = this._firstNext(id);
+        if (nx) this._pushTo(nx);
+      });
+      return;
+    }
+
+    // default pass-through
+    const nx = this._firstNext(id); if (nx) this._pushTo(nx);
   }
 
   _tryPushingFromBuffer(bufId) {
@@ -179,12 +235,16 @@ export class Engine {
     const next = this._firstNext(bufId); if (!next) return;
     const defNext = this.defs.get(next); if (!defNext) return;
     const tNext = String(defNext.type);
+
     if (tNext === 'Workstation') {
       const ws = this.workstations.get(next); if (!ws) return;
       const slotsFree = Math.max(ws.m - ws.busy, 0);
-      if (slotsFree > 0 && b.q > 0) { b.q--; ws.inQ++; this._tryStartService(next); }
+      if (slotsFree > 0 && b.q > 0) {
+        b.q--; ws.inQ++; this._tryStartService(next);
+      }
       return;
     }
+
     if (b.q > 0) { b.q--; this._pushTo(next); }
   }
 
@@ -206,11 +266,7 @@ export class Engine {
     }
   }
 
-  _firstNext(id) {
-    const arr = this.adj.get(id) || [];
-    return arr.length ? arr[0] : null;
-  }
-
+  // ---- CONTROL LOOP ----
   start() {
     if (this.running) return;
     this.running = true;
@@ -256,9 +312,9 @@ export class Engine {
     this.simTime = 0;
     this.running = false;
     this.metrics = { throughput: 0 };
+    for (const qc of this.quality.values()) qc.reset();
   }
 
-  // runtime param update (MVP)
   applyParam(id, key, value) {
     const def = this.defs.get(id);
     if (!def) throw new Error(`Unknown component: ${id}`);
@@ -273,16 +329,18 @@ export class Engine {
       const ws = this.workstations.get(id);
       if (ws) ws.svcDist = value?.dist || value || ws.svcDist;
     }
+    if (def.type === 'QualityCheck' && key === 'RejectProb') {
+      const qc = this.quality.get(id);
+      if (qc) qc.rejectProb = Number(value);
+    }
   }
 
   _emitState() {
     const components = {};
-    for (const [id, b] of this.buffers.entries()) {
-      components[id] = { type:'Buffer', q:b.q, cap:b.cap };
-    }
-    for (const [id, w] of this.workstations.entries()) {
-      components[id] = { type:'Workstation', busy:w.busy, m:w.m, inQ:w.inQ };
-    }
+    for (const [id, b] of this.buffers.entries()) components[id] = { type:'Buffer', q:b.q, cap:b.cap };
+    for (const [id, w] of this.workstations.entries()) components[id] = { type:'Workstation', busy:w.busy, m:w.m, inQ:w.inQ };
+    for (const [id, q] of this.quality.entries()) components[id] = { ...(components[id]||{}), type:'QualityCheck', ok:q.stats.ok, nok:q.stats.nok };
+    for (const [id, r] of this.reworks.entries()) components[id] = { ...(components[id]||{}), type:'Rework', completed:r.completed };
     this.onState({ simTime: this.simTime, running: this.running, components });
   }
 
