@@ -1,46 +1,43 @@
+
 import React, { useState } from 'react';
-import { apiLoadModelFromText } from '../lib/modelIO';
+import { apiLoadModelFromText, parseModel } from '../lib/modelIO';
+import { toGraph } from '../lib/graph';
+import { useModelStore } from '../store/useModelStore';
 
 const EXAMPLE = `define:
   SRC:
     type: EntityGenerator
     inputs:
       InterarrivalTime:
-        dist: { type: Exponential, mean: 12 }
+        dist: { type: Exponential, mean: 8 }
       EntityType: Part
-  BUF: { type: Buffer, inputs: { Capacity: 50 } }
+  BUF: { type: Buffer, inputs: { Capacity: 100 } }
   WS1:
     type: Workstation
     inputs:
       ServiceTime: { dist: { type: Triangular, min: 8, mode: 10, max: 15 } }
-  QC: { type: QualityCheck, inputs: { RejectProb: 0.06 } }
-  REW:
-    type: Rework
-    inputs:
-      ServiceTime: { dist: { type: Uniform, min: 20, max: 40 } }
-      MaxLoops: 1
   SNK: { type: EntitySink }
 links:
   - { from: SRC, to: BUF }
   - { from: BUF, to: WS1 }
-  - { from: WS1, to: QC }
-  - { from: QC, to: REW, condition: { expr: "reject" } }
-  - { from: QC, to: SNK, condition: { expr: "ok" } }
-  - { from: REW, to: QC }
+  - { from: WS1, to: SNK }
 globals:
   units: { time: s }
-  rng: { seed: 12345 }
-  warmup: 60
-  stopCondition: { time: 3600 }
+  rng: { seed: 1 }
+  stopCondition: { time: 600 }
 `;
 
 export default function TextEditor() {
   const [text, setText] = useState(EXAMPLE);
   const [status, setStatus] = useState<string>('');
+  const setGraph = useModelStore(s => s.setGraph);
 
   const load = async () => {
     try {
       setStatus('Uploading…');
+      const modelObj = parseModel(text);
+      const g = toGraph(modelObj);
+      setGraph(g.nodes, g.links);
       await apiLoadModelFromText(text);
       setStatus('Model loaded ✔');
     } catch (e:any) {

@@ -1,9 +1,11 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import Palette from './components/Palette';
 import Toolbar from './components/Toolbar';
 import OutputPanel from './components/OutputPanel';
 import TextEditor from './components/TextEditor';
 import { WsClient } from './lib/wsClient';
+import Canvas2D from './components/Canvas2D';
 
 export default function App() {
   const [logs, setLogs] = useState<string[]>([]);
@@ -26,7 +28,7 @@ export default function App() {
       <Palette />
       <div style={{ flex:1, display:'flex', flexDirection:'column' }}>
         <Toolbar />
-        <div style={{ flex:1, background:'#eee', margin:8 }} />
+        <Canvas2D />
         <TextEditor />
         <OutputPanel logs={logs} metrics={metrics} />
       </div>

@@ -1,16 +1,18 @@
+
 import { HTTP_URL } from './config';
 import { parse as parseYaml } from 'yaml';
 
-export async function apiLoadModelFromText(text: string) {
-  // Spróbuj sparsować YAML → obiekt. Jeśli to już JSON, też zadziała.
-  let payload: any;
-  try {
-    payload = parseYaml(text);
-  } catch {
-    try { payload = JSON.parse(text); }
-    catch (e) { throw new Error('Model is not valid YAML/JSON'); }
+export function parseModel(text: string): any {
+  // YAML first, then JSON
+  try { return parseYaml(text); }
+  catch {
+    try { return JSON.parse(text); }
+    catch { throw new Error('Model is not valid YAML/JSON'); }
   }
+}
 
+export async function apiLoadModelFromText(text: string) {
+  const payload = parseModel(text);
   const res = await fetch(`${HTTP_URL}/api/load`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
