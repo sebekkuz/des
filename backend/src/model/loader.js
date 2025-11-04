@@ -5,20 +5,18 @@ import { ModelSchema } from './schema.js';
 // (via body parser) or an object.  Validates against the shared
 // schema.  Throws on error.
 
-export function loadModel(src) {
-  let data;
-  if (typeof src === 'string') {
-    try {
-      data = JSON.parse(src);
-    } catch (jsonErr) {
-      data = parseYaml(src);
-    }
-  } else {
-    data = src;
+// backend/src/model/loader.js
+// Na razie: minimalny loader. (Możesz dodać walidację później.)
+export function loadModel(input) {
+  if (!input || typeof input !== 'object') {
+    throw new Error('Model must be an object (JSON/YAML).');
   }
-  const result = ModelSchema.safeParse(data);
-  if (!result.success) {
-    throw new Error('Model validation failed');
+  if (!input.define || typeof input.define !== 'object') {
+    throw new Error('Model missing "define" section.');
   }
-  return result.data;
+  if (!Array.isArray(input.links)) {
+    throw new Error('Model missing "links" array.');
+  }
+  // Można dodać normalizacje itd. Na teraz — zwróć jak jest.
+  return input;
 }
