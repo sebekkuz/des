@@ -17,12 +17,15 @@ export default function App() {
   useEffect(() => {
     const ws = new WsClient({
       onLog:   (m)=> setLogs((prev)=> [...prev, `[${m.at}] ${m.msg}`].slice(-500)),
-      onMetric:(m)=> setMetrics((prev)=> [...prev, ...(m.series||[])].slice(-1000)),
+      onMetric:(m)=> setMetrics((prev)=> [...prev, ...(m.series||[])].slice(-2000)),
       onState: (m)=> {
         if (m.components) applySnap(m.components);
         setLogs((prev)=> [...prev, `[STATE] t=${m.simTime} running=${m.running}`].slice(-500));
       },
       onError: (m)=> setLogs((prev)=> [...prev, `[ERROR] ${m.msg}`].slice(-500)),
+      onEntityMove: (m)=> {
+        window.dispatchEvent(new CustomEvent('ENTITY_MOVE', { detail: m }));
+      }
     });
     ws.connect();
   }, []);

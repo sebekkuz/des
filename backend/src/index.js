@@ -1,5 +1,5 @@
 
-// backend/src/index.js
+// backend/src/index.js (A+B+C)
 import express from 'express';
 import http from 'http';
 import { WebSocketServer } from 'ws';
@@ -9,8 +9,6 @@ import { loadModel } from './model/loader.js';
 import { Engine } from './sim/engine.js';
 
 const app = express();
-
-// CORS
 const FRONT_ORIGIN = process.env.FRONT_ORIGIN || '*';
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', FRONT_ORIGIN);
@@ -21,7 +19,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// accept both json and raw text (yaml/json)
 app.use(express.json({ limit: '2mb' }));
 app.use(express.text({ type: ['text/*','application/yaml','application/x-yaml'], limit: '2mb' }));
 
@@ -51,8 +48,9 @@ app.post('/api/load', (req, res) => {
       onMetric: (series) => wsBroadcast({ type:'METRIC', series }),
       onLog:    (entry) => wsBroadcast({ type:'LOG', ...entry }),
       onError:  (err) => wsBroadcast({ type:'ERROR', msg:String(err) }),
+      onEntityMove: (m) => wsBroadcast({ type:'ENTITY_MOVE', ...m }),
     });
-    if (engine.loadModel) engine.loadModel(modelDef);
+    engine.loadModel(modelDef);
     wsBroadcast({ type:'LOG', level:'info', msg:'Model loaded', at:Date.now() });
     res.json({ ok: true });
   } catch (e) {
@@ -85,10 +83,22 @@ app.post('/api/reset', (req,res) => {
   engine.reset(); wsBroadcast({ type:'STATE', simTime:0, running:false }); res.json({ ok:true });
 });
 
+// CSV export of metric series
+app.get('/api/export/:name', (req, res) => {
+  if (!engine) return res.status(400).json({ error:'No model loaded' });
+  const name = String(req.params.name || 'metrics');
+  const rows = [['name','t','v']];
+  for (const s of engine.series) rows.push([s.name, s.t, s.v]);
+  const csv = rows.map(r => r.join(',')).join('\n');
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}.csv"`);
+  res.end(csv);
+});
+
 const server = http.createServer(app);
 wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (socket) => {
-  socket.send(JSON.stringify({ type: 'HELLO', version: '0.0.2' }));
+  socket.send(JSON.stringify({ type: 'HELLO', version: '0.0.3' }));
 });
 
 const PORT = process.env.PORT || 3000;

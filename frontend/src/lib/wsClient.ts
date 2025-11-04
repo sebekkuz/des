@@ -6,14 +6,17 @@ type Cbs = {
   onMetric?: (m:any)=>void;
   onLog?: (m:any)=>void;
   onError?: (m:any)=>void;
+  onEntityMove?: (m:any)=>void;
 };
 
 export class WsClient {
   ws: WebSocket | null = null;
   cbs: Cbs;
-  constructor(cbs: Cbs = {}) { this.cbs = cbs; }
+  constructor(cbs: Cbs = {}) {
+    this.cbs = cbs;
+  }
   connect() {
-    if (this.ws) { try { this.ws.close(); } catch {} }
+    if (this.ws) try { this.ws.close(); } catch {}
     const ws = new WebSocket(WS_URL);
     this.ws = ws;
     ws.onopen = () => { console.log('[WS] open'); };
@@ -21,10 +24,11 @@ export class WsClient {
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
-        if (msg.type === 'STATE')  this.cbs.onState?.(msg);
-        else if (msg.type === 'METRIC') this.cbs.onMetric?.(msg);
-        else if (msg.type === 'LOG')    this.cbs.onLog?.(msg);
-        else if (msg.type === 'ERROR')  this.cbs.onError?.(msg);
+        if (msg.type === 'STATE')        this.cbs.onState?.(msg);
+        else if (msg.type === 'METRIC')  this.cbs.onMetric?.(msg);
+        else if (msg.type === 'LOG')     this.cbs.onLog?.(msg);
+        else if (msg.type === 'ERROR')   this.cbs.onError?.(msg);
+        else if (msg.type === 'ENTITY_MOVE') this.cbs.onEntityMove?.(msg);
       } catch {}
     };
   }

@@ -1,9 +1,10 @@
 
-// backend/src/sim/engine.js (ETAP 2)
+// backend/src/sim/engine.js (A+B+C)
 import { EventQueue } from './eventQueue.js';
 import { QualityCheck } from './components/QualityCheck.js';
 import { Rework } from './components/Rework.js';
 import { Conveyor } from './components/Conveyor.js';
+import { Statistics } from './Statistics.js';
 
 function mulberry32(seed) {
   let t = seed >>> 0;
@@ -47,6 +48,7 @@ export class Engine {
     this.onMetric = callbacks.onMetric || (() => {});
     this.onLog = callbacks.onLog || (() => {});
     this.onError = callbacks.onError || (() => {});
+    this.onEntityMove = callbacks.onEntityMove || (() => {});
 
     this.eq = new EventQueue();
     this.simTime = 0;
@@ -57,6 +59,8 @@ export class Engine {
     this.stopAt = 3600;
     this.rng = Math.random;
     this.metrics = { throughput: 0 };
+
+    this.series = []; // for CSV export (append emitted metrics)
 
     this.defs = new Map();
     this.links = [];          // {from,to,condition?,via?}
@@ -70,6 +74,9 @@ export class Engine {
     this.quality = new Map();
     this.reworks = new Map();
     this.conveyors = new Map();
+
+    this.stats = new Statistics();
+    this._moveId = 0; // id for ENTITY_MOVE visualization
   }
 
   loadModel(model) {
@@ -117,7 +124,7 @@ export class Engine {
       if (type === 'Workstation') {
         const svcDist = inputs.ServiceTime?.dist || inputs.ServiceTime || null;
         const m = Number(inputs.m ?? 1);
-        this.workstations.set(id, { busy: 0, m, svcDist, inQ: 0 });
+        this.workstations.set(id, { busy: 0, m, svcDist, inQ: 0 };
       }
       if (type === 'QualityCheck') this.quality.set(id, new QualityCheck(inputs));
       if (type === 'Rework') this.reworks.set(id, new Rework(inputs));
@@ -134,7 +141,6 @@ export class Engine {
         this.onLog({ level:'warn', msg:`Generator ${id} nie ma ścieżki do SNK`, at:Date.now() });
         continue;
       }
-      self = this;
       this.generators.push({ id, interarrivalDist: inter });
     }
 
@@ -160,61 +166,47 @@ export class Engine {
     return false;
   }
 
-  _firstNext(id) {
-    const arr = this.adj.get(id) || [];
-    return arr.length ? arr[0] : null;
-  }
-
-  _nextByCondition(fromId, outcome) {
-    for (const l of this.links) {
-      if (l.from === fromId && l.condition && String(l.condition.expr) === String(outcome)) {
-        return l;
-      }
-    }
-    return null;
-  }
-
-  _findFirstLink(fromId) {
+  _firstLink(fromId) {
     for (const l of this.links) if (l.from === fromId) return l;
     return null;
   }
 
-  _pushThroughLink(link) {
-    const { to, via } = link;
-    if (via && this.conveyors.has(via)) {
-      const conv = this.conveyors.get(via);
-      const dt = conv.transitTime();
-      this.eq.push(this.simTime + dt, () => this._pushTo(to));
-    } else {
-      this._pushTo(to);
+  _condLink(fromId, outcome) {
+    for (const l of this.links) {
+      if (l.from === fromId && l.condition && String(l.condition.expr) === String(outcome)) return l;
     }
+    return null;
   }
 
-  // ---- FLOW ----
   _onArrival(g) {
-    const next = this._firstNext(g.id);
-    if (next) this._pushTo(next);
+    const link = this._firstLink(g.id);
+    if (link) this._moveThrough(link);
     const dt = sampleDist(g.interarrivalDist, this.rng);
     this.eq.push(this.simTime + dt, () => this._onArrival(g));
+  }
+
+  _moveThrough(link) {
+    const { to, via } = link;
+    const conv = via ? this.conveyors.get(via) : null;
+    const dt = conv ? conv.transitTime() : 0;
+    const id = ++this._moveId;
+    if (dt > 0) this.onEntityMove({ id, from: link.from, to, tStart: this.simTime, tEnd: this.simTime + dt });
+    if (dt > 0) this.eq.push(this.simTime + dt, () => this._pushTo(to));
+    else this._pushTo(to);
   }
 
   _pushTo(id) {
     const def = this.defs.get(id); if (!def) return;
     const type = String(def.type);
-
-    if (type === 'EntitySink') {
-      this.metrics.throughput += 1;
-      return;
-    }
+    if (type === 'EntitySink') { this.metrics.throughput += 1; return; }
 
     if (type === 'Buffer') {
-      const b = this.buffers.get(id);
-      const cap = b?.cap ?? Infinity;
+      const b = this.buffers.get(id), cap = b?.cap ?? Infinity;
       if (b) {
-        if (b.q < cap) { b.q++; this._tryPushingFromBuffer(id); }
+        if (b.q < cap) { b.q++; this._drainBuffer(id); }
         else this.onLog({ level:'warn', msg:`Buffer ${id} full (q=${b.q}/${cap})`, at:Date.now() });
       } else {
-        const link = this._findFirstLink(id); if (link) this._pushThroughLink(link);
+        const l = this._firstLink(id); if (l) this._moveThrough(l);
       }
       return;
     }
@@ -226,11 +218,9 @@ export class Engine {
 
     if (type === 'QualityCheck') {
       const qc = this.quality.get(id);
-      const outcome = qc ? (qc.decide(this.rng)) : 'ok';
-      const condLink = this._nextByCondition(id, outcome);
-      const fallback = this._findFirstLink(id);
-      const link = condLink || fallback;
-      if (link) this._pushThroughLink(link);
+      const outcome = qc ? qc.decide(this.rng) : 'ok';
+      const link = this._condLink(id, outcome) || this._firstLink(id);
+      if (link) this._moveThrough(link);
       return;
     }
 
@@ -239,32 +229,26 @@ export class Engine {
       const dt = sampleDist(rw?.serviceDist, this.rng) || 0;
       this.eq.push(this.simTime + dt, () => {
         if (rw) rw.completed++;
-        const link = this._findFirstLink(id);
-        if (link) this._pushThroughLink(link);
+        const link = this._firstLink(id); if (link) this._moveThrough(link);
       });
       return;
     }
 
-    const link = this._findFirstLink(id);
-    if (link) this._pushThroughLink(link);
+    const link = this._firstLink(id);
+    if (link) this._moveThrough(link);
   }
 
-  _tryPushingFromBuffer(bufId) {
+  _drainBuffer(bufId) {
     const b = this.buffers.get(bufId); if (!b || b.q <= 0) return;
-    const link = this._findFirstLink(bufId); if (!link) return;
-    const defNext = this.defs.get(link.to); if (!defNext) return;
-    const tNext = String(defNext.type);
-
-    if (tNext === 'Workstation') {
-      const ws = this.workstations.get(link.to); if (!ws) return;
-      const slotsFree = Math.max(ws.m - ws.busy, 0);
-      if (slotsFree > 0 && b.q > 0) {
-        b.q--; ws.inQ++; this._tryStartService(link.to);
-      }
+    const link = this._firstLink(bufId); if (!link) return;
+    const nextDef = this.defs.get(link.to); if (!nextDef) return;
+    if (String(nextDef.type) === 'Workstation') {
+      const ws = this.workstations.get(link.to);
+      const free = Math.max(ws.m - ws.busy, 0);
+      if (free > 0 && b.q > 0) { b.q--; ws.inQ++; this._tryStartService(link.to); }
       return;
     }
-
-    if (b.q > 0) { b.q--; this._pushThroughLink(link); }
+    if (b.q > 0) { b.q--; this._moveThrough(link); }
   }
 
   _tryStartService(wsId) {
@@ -279,10 +263,8 @@ export class Engine {
   _onServiceDone(wsId) {
     const ws = this.workstations.get(wsId); if (ws && ws.busy > 0) ws.busy--;
     this._tryStartService(wsId);
-    const link = this._findFirstLink(wsId); if (link) this._pushThroughLink(link);
-    for (const from of (this.rev.get(wsId) || [])) {
-      if (this.buffers.has(from)) this._tryPushingFromBuffer(from);
-    }
+    const link = this._firstLink(wsId); if (link) this._moveThrough(link);
+    for (const from of (this.rev.get(wsId) || [])) if (this.buffers.has(from)) this._drainBuffer(from);
   }
 
   start() {
@@ -329,6 +311,8 @@ export class Engine {
     this.simTime = 0;
     this.running = false;
     this.metrics = { throughput: 0 };
+    this.series = [];
+    this.stats = new Statistics();
     for (const qc of this.quality.values()) qc.reset?.();
   }
 
@@ -365,9 +349,20 @@ export class Engine {
     for (const [id, r] of this.reworks.entries()) components[id] = { ...(components[id]||{}), type:'Rework', completed:r.completed };
     for (const [id, c] of this.conveyors.entries()) components[id] = { ...(components[id]||{}), type:'Conveyor', length:c.length, speed:c.speed };
     this.onState({ simTime: this.simTime, running: this.running, components });
+
+    // stats step
+    this.stats.step(this.simTime, components);
   }
 
   _emitMetrics() {
-    this.onMetric([{ name:'throughput_cum', t:this.simTime, v:this.metrics.throughput }]);
+    const k = this.stats.snapshotAverages(this.simTime);
+    const payload = [
+      { name:'throughput_cum', t:this.simTime, v:this.metrics.throughput },
+      { name:'WIP_avg',        t:this.simTime, v:k.WIP_avg },
+      { name:'Util_avg',       t:this.simTime, v:k.Util_avg },
+      { name:'Scrap_rate',     t:this.simTime, v:k.Scrap_rate }
+    ];
+    this.series.push(...payload);
+    this.onMetric(payload);
   }
 }
