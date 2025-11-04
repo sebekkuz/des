@@ -1,41 +1,35 @@
-import React from 'react';
-import { Canvas } from '@react-three/fiber';
-import useStore from './store/useModelStore';
+import React, { useEffect, useRef, useState } from 'react';
+import Palette from './components/Palette';
+import Toolbar from './components/Toolbar';
+import OutputPanel from './components/OutputPanel';
+import TextEditor from './components/TextEditor';
+import { WsClient } from './lib/wsClient';
 
-// Main application component.  This file defines a minimal UI
-// structure including a toolbar, palette, 3D canvas, and output panel.
+export default function App() {
+  const [logs, setLogs] = useState<string[]>([]);
+  const [metrics, setMetrics] = useState<{name:string,t:number,v:number}[]>([]);
+  const wsRef = useRef<WsClient|null>(null);
 
-const App: React.FC = () => {
-  const { model } = useStore();
+  useEffect(() => {
+    const ws = new WsClient({
+      onLog:   (m)=> setLogs((prev)=> [...prev, `[${m.at}] ${m.msg}`].slice(-500)),
+      onMetric:(m)=> setMetrics((prev)=> [...prev, ...(m.series||[])].slice(-1000)),
+      onState: (m)=> setLogs((prev)=> [...prev, `[STATE] t=${m.simTime} running=${m.running}`].slice(-500)),
+      onError: (m)=> setLogs((prev)=> [...prev, `[ERROR] ${m.msg}`].slice(-500)),
+    });
+    ws.connect();
+    wsRef.current = ws;
+  }, []);
 
   return (
-    <div style={{ display: 'flex', height: '100vh' }}>
-      {/* Sidebar palette */}
-      <div style={{ width: '240px', borderRight: '1px solid #ccc', padding: '0.5rem' }}>
-        <h3>Palette</h3>
-        <p>Drag components into the canvas</p>
-        {/* Future: list of components with drag handlers */}
-      </div>
-      {/* Main content: 3D canvas and output */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        {/* Toolbar */}
-        <div style={{ padding: '0.5rem', borderBottom: '1px solid #ccc', display: 'flex', gap: '0.5rem' }}>
-          <button onClick={() => console.log('start')}>Start</button>
-          <button onClick={() => console.log('pause')}>Pause</button>
-          <button onClick={() => console.log('reset')}>Reset</button>
-        </div>
-        {/* 3D Canvas */}
-        <Canvas style={{ flex: 1, background: '#f0f0f0' }}>
-          {/* TODO: render nodes and connections based on model */}
-        </Canvas>
-        {/* Output panel */}
-        <div style={{ height: '200px', borderTop: '1px solid #ccc', padding: '0.5rem', overflowY: 'auto' }}>
-          <h3>Output</h3>
-          {/* TODO: charts and logs */}
-        </div>
+    <div style={{ display:'flex', height:'100vh' }}>
+      <Palette />
+      <div style={{ flex:1, display:'flex', flexDirection:'column' }}>
+        <Toolbar />
+        <div style={{ flex:1, background:'#eee', margin:8 }} />
+        <TextEditor />
+        <OutputPanel logs={logs} metrics={metrics} />
       </div>
     </div>
   );
-};
-
-export default App;
+}
