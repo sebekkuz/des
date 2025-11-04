@@ -14,9 +14,8 @@
     "@react-three/fiber": "8.15.14",
     "three": "0.153.0",
     "zustand": "4.3.9",
-    "chart.js": "4.4.1",
     "zod": "3.22.4",
-    "yaml": "2.3.3"
+    "yaml": "2.3.3",
     "react-chartjs-2": "5.2.0",
     "chart.js": "4.4.3"
   },
