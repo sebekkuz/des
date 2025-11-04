@@ -1,0 +1,45 @@
+define:
+  SRC:
+    type: EntityGenerator
+    inputs:
+      InterarrivalTime:
+        dist:
+          type: Exponential
+          mean: 12
+      EntityType: Part
+  BUF:
+    type: Buffer
+    inputs:
+      Capacity: 50
+  WS1:
+    type: Workstation
+    inputs:
+      ServiceTime:
+        dist:
+          type: Triangular
+          min: 8
+          mode: 10
+          max: 15
+  QC:
+    type: QualityCheck
+    inputs:
+      RejectProb: 0.06
+  SNK:
+    type: EntitySink
+links:
+  - from: SRC
+    to: BUF
+  - from: BUF
+    to: WS1
+  - from: WS1
+    to: QC
+  - from: QC
+    to: SNK
+globals:
+  units:
+    time: s
+  rng:
+    seed: 12345
+  warmup: 300
+  stopCondition:
+    time: 3600
