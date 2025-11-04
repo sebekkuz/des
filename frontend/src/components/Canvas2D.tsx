@@ -1,9 +1,9 @@
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useRef } from 'react';
 import { useModelStore } from '../store/useModelStore';
+import { nodeColor } from '../lib/graph';
 
-function colorFor(type: string, state: any): string {
-  // default palette
+function stateColor(type: string, state: any): string {
   const base = {
     idle: '#ffffff',
     busy: '#d1fae5',
@@ -11,19 +11,19 @@ function colorFor(type: string, state: any): string {
     starved: '#fca5a5',
     other: '#e5e7eb'
   };
-  if (!state) return base.other;
+  if (!state) return nodeColor(type) || base.other;
 
-  if (state.type === 'Workstation') {
+  if (type === 'Workstation') {
     if (state.busy > 0) return base.busy;
-    if (state.inQ > 0) return base.blocked; // czekają, ale brak slotu
+    if (state.inQ > 0) return base.blocked;
     return base.idle;
   }
-  if (state.type === 'Buffer') {
-    if (state.cap !== Infinity && state.q >= state.cap) return base.blocked; // full
+  if (type === 'Buffer') {
+    if (state.cap !== Infinity && state.q >= state.cap) return base.blocked;
     if (state.q === 0) return base.starved;
     return base.idle;
   }
-  return base.other;
+  return nodeColor(type) || base.other;
 }
 
 export default function Canvas2D() {
@@ -37,7 +37,6 @@ export default function Canvas2D() {
   const width = Math.max(800, ...nodes.map(n => n.x + 220));
   const height = Math.max(400, ...nodes.map(n => n.y + 120));
 
-  // drag state
   const drag = useRef<{ id:string, dx:number, dy:number } | null>(null);
 
   const onMouseDown = (e: React.MouseEvent, id: string) => {
@@ -75,7 +74,6 @@ export default function Canvas2D() {
           </marker>
         </defs>
 
-        {/* links */}
         {links.map((l, idx) => {
           const a = nodes.find(n => n.id === l.from);
           const b = nodes.find(n => n.id === l.to);
@@ -87,31 +85,24 @@ export default function Canvas2D() {
           return <path key={idx} d={d} fill="none" stroke="#94a3b8" strokeWidth="2" markerEnd="url(#arrow)" />;
         })}
 
-        {/* nodes with ports */}
         {nodes.map(n => {
           const st = compState[n.id];
-          const fill = colorFor(n.type, st);
+          const fill = stateColor(n.type, st);
           const isSel = n.id === selectedId;
           const stroke = isSel ? '#2563eb' : '#94a3b8';
           const strokeW = isSel ? 3 : 1.5;
 
-          // Conveyor look: pill shape
           const isConv = n.type === 'Conveyor';
           return (
             <g key={n.id} transform={`translate(${n.x},${n.y})`}
                onMouseDown={(e)=>onMouseDown(e, n.id)} style={{ cursor:'move' }}>
               {isConv ? (
-                <g>
-                  <rect x="0" y="10" width="160" height="36" rx="18" ry="18" fill={fill} stroke={stroke} strokeWidth={strokeW} />
-                </g>
+                <rect x="0" y="10" width="160" height="36" rx="18" ry="18" fill={fill} stroke={stroke} strokeWidth={strokeW} />
               ) : (
                 <rect width="160" height="56" rx="10" ry="10" fill={fill} stroke={stroke} strokeWidth={strokeW} />
               )}
-              {/* title */}
               <text x="12" y="22" fontSize="12" fontWeight="600">{n.id}</text>
               <text x="12" y="38" fontSize="11" fill="#475569">{n.type}</text>
-
-              {/* ports */}
               <circle cx="0" cy="28" r="4" fill="#64748b" />
               <circle cx="160" cy="28" r="4" fill="#64748b" />
             </g>
