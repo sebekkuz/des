@@ -1,38 +1,45 @@
-// Simple WebSocket client with auto-reconnect and message routing
+
 import { WS_URL } from './config';
 
-type Handlers = {
-  onState?:   (msg:any)=>void;
-  onMetric?:  (msg:any)=>void;
-  onLog?:     (msg:any)=>void;
-  onError?:   (msg:any)=>void;
+type Cbs = {
+  onState?: (m:any)=>void;
+  onMetric?: (m:any)=>void;
+  onLog?: (m:any)=>void;
+  onError?: (m:any)=>void;
+  onOpenChange?: (online:boolean)=>void;
 };
 
 export class WsClient {
-  private socket: WebSocket | null = null;
-  constructor(private handlers: Handlers = {}) {}
-
+  ws: WebSocket | null = null;
+  cbs: Cbs;
+  backoff = 500;
+  timer: any = null;
+  constructor(cbs: Cbs = {}) { this.cbs = cbs; }
   connect() {
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) return;
-    this.socket = new WebSocket(WS_URL);
-    this.socket.addEventListener('open', () => console.log('[WS] open'));
-    this.socket.addEventListener('close', () => {
-      console.log('[WS] closed, retry in 2s');
-      setTimeout(()=>this.connect(), 2000);
-    });
-    this.socket.addEventListener('message', (ev) => {
-      try {
-        const msg = JSON.parse(ev.data as string);
-        switch (msg.type) {
-          case 'STATE':  this.handlers.onState?.(msg);  break;
-          case 'METRIC': this.handlers.onMetric?.(msg); break;
-          case 'LOG':    this.handlers.onLog?.(msg);    break;
-          case 'ERROR':  this.handlers.onError?.(msg);  break;
-          default: console.debug('[WS] unhandled', msg);
-        }
-      } catch (e) {
-        console.error('[WS] parse error', e);
+    if (this.ws) try { this.ws.close(); } catch {}
+    const ws = new WebSocket(WS_URL);
+    this.ws = ws;
+    ws.onopen = () => { this.backoff = 500; this.cbs.onOpenChange?.(true); console.log('[WS] open'); };
+    ws.onclose = () => {
+      this.cbs.onOpenChange?.(false);
+      console.log('[WS] close');
+      if (!document.hidden) {
+        this.timer = setTimeout(()=> this.connect(), this.backoff);
+        this.backoff = Math.min(this.backoff * 2, 5000);
       }
-    });
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'STATE')  this.cbs.onState?.(msg);
+        else if (msg.type === 'METRIC') this.cbs.onMetric?.(msg);
+        else if (msg.type === 'LOG')    this.cbs.onLog?.(msg);
+        else if (msg.type === 'ERROR')  this.cbs.onError?.(msg);
+      } catch {}
+    };
+  }
+  reconnect() {
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    this.connect();
   }
 }

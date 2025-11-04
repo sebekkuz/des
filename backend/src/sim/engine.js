@@ -1,8 +1,9 @@
 
-// backend/src/sim/engine.js (ETAP 1: QC + Rework + conditional routing)
+// backend/src/sim/engine.js (ETAP 2)
 import { EventQueue } from './eventQueue.js';
 import { QualityCheck } from './components/QualityCheck.js';
 import { Rework } from './components/Rework.js';
+import { Conveyor } from './components/Conveyor.js';
 
 function mulberry32(seed) {
   let t = seed >>> 0;
@@ -57,19 +58,18 @@ export class Engine {
     this.rng = Math.random;
     this.metrics = { throughput: 0 };
 
-    // graph/model
     this.defs = new Map();
-    this.links = [];          // {from,to,condition?}
-    this.adj = new Map();     // from -> [to,...]
-    this.rev = new Map();     // to -> [from,...]
+    this.links = [];          // {from,to,condition?,via?}
+    this.adj = new Map();
+    this.rev = new Map();
     this.sinks = new Set();
-    this.generators = [];     // { id, interarrivalDist }
+    this.generators = [];
 
-    // component states
-    this.buffers = new Map();      // id -> {cap,q}
-    this.workstations = new Map(); // id -> {busy,m,svcDist,inQ}
-    this.quality = new Map();      // id -> QualityCheck
-    this.reworks = new Map();      // id -> Rework
+    this.buffers = new Map();
+    this.workstations = new Map();
+    this.quality = new Map();
+    this.reworks = new Map();
+    this.conveyors = new Map();
   }
 
   loadModel(model) {
@@ -87,6 +87,7 @@ export class Engine {
     this.links = rawLinks.map(l => ({
       from: String(l.from),
       to: String(l.to),
+      via: l.via ? String(l.via) : null,
       condition: l.condition && typeof l.condition === 'object' ? l.condition : null
     }));
 
@@ -99,12 +100,12 @@ export class Engine {
       this.rev.get(to).push(from);
     }
 
-    // components
     this.sinks.clear();
     this.buffers.clear();
     this.workstations.clear();
     this.quality.clear();
     this.reworks.clear();
+    this.conveyors.clear();
     for (const [id, def] of Object.entries(define)) {
       const type = String(def.type);
       const inputs = def.inputs || {};
@@ -120,9 +121,9 @@ export class Engine {
       }
       if (type === 'QualityCheck') this.quality.set(id, new QualityCheck(inputs));
       if (type === 'Rework') this.reworks.set(id, new Rework(inputs));
+      if (type === 'Conveyor') this.conveyors.set(id, new Conveyor(inputs));
     }
 
-    // generators
     this.generators = [];
     for (const [id, def] of Object.entries(define)) {
       if (String(def.type) !== 'EntityGenerator') continue;
@@ -133,6 +134,7 @@ export class Engine {
         this.onLog({ level:'warn', msg:`Generator ${id} nie ma ścieżki do SNK`, at:Date.now() });
         continue;
       }
+      self = this;
       this.generators.push({ id, interarrivalDist: inter });
     }
 
@@ -166,10 +168,26 @@ export class Engine {
   _nextByCondition(fromId, outcome) {
     for (const l of this.links) {
       if (l.from === fromId && l.condition && String(l.condition.expr) === String(outcome)) {
-        return l.to;
+        return l;
       }
     }
     return null;
+  }
+
+  _findFirstLink(fromId) {
+    for (const l of this.links) if (l.from === fromId) return l;
+    return null;
+  }
+
+  _pushThroughLink(link) {
+    const { to, via } = link;
+    if (via && this.conveyors.has(via)) {
+      const conv = this.conveyors.get(via);
+      const dt = conv.transitTime();
+      this.eq.push(this.simTime + dt, () => this._pushTo(to));
+    } else {
+      this._pushTo(to);
+    }
   }
 
   // ---- FLOW ----
@@ -196,7 +214,7 @@ export class Engine {
         if (b.q < cap) { b.q++; this._tryPushingFromBuffer(id); }
         else this.onLog({ level:'warn', msg:`Buffer ${id} full (q=${b.q}/${cap})`, at:Date.now() });
       } else {
-        const nx = this._firstNext(id); if (nx) this._pushTo(nx);
+        const link = this._findFirstLink(id); if (link) this._pushThroughLink(link);
       }
       return;
     }
@@ -208,10 +226,11 @@ export class Engine {
 
     if (type === 'QualityCheck') {
       const qc = this.quality.get(id);
-      const outcome = qc ? qc.decide(this.rng) : 'ok';
-      const condNext = this._nextByCondition(id, outcome);
-      const nx = condNext || this._firstNext(id);
-      if (nx) this._pushTo(nx);
+      const outcome = qc ? (qc.decide(this.rng)) : 'ok';
+      const condLink = this._nextByCondition(id, outcome);
+      const fallback = this._findFirstLink(id);
+      const link = condLink || fallback;
+      if (link) this._pushThroughLink(link);
       return;
     }
 
@@ -220,32 +239,32 @@ export class Engine {
       const dt = sampleDist(rw?.serviceDist, this.rng) || 0;
       this.eq.push(this.simTime + dt, () => {
         if (rw) rw.completed++;
-        const nx = this._firstNext(id);
-        if (nx) this._pushTo(nx);
+        const link = this._findFirstLink(id);
+        if (link) this._pushThroughLink(link);
       });
       return;
     }
 
-    // default pass-through
-    const nx = this._firstNext(id); if (nx) this._pushTo(nx);
+    const link = this._findFirstLink(id);
+    if (link) this._pushThroughLink(link);
   }
 
   _tryPushingFromBuffer(bufId) {
     const b = this.buffers.get(bufId); if (!b || b.q <= 0) return;
-    const next = this._firstNext(bufId); if (!next) return;
-    const defNext = this.defs.get(next); if (!defNext) return;
+    const link = this._findFirstLink(bufId); if (!link) return;
+    const defNext = this.defs.get(link.to); if (!defNext) return;
     const tNext = String(defNext.type);
 
     if (tNext === 'Workstation') {
-      const ws = this.workstations.get(next); if (!ws) return;
+      const ws = this.workstations.get(link.to); if (!ws) return;
       const slotsFree = Math.max(ws.m - ws.busy, 0);
       if (slotsFree > 0 && b.q > 0) {
-        b.q--; ws.inQ++; this._tryStartService(next);
+        b.q--; ws.inQ++; this._tryStartService(link.to);
       }
       return;
     }
 
-    if (b.q > 0) { b.q--; this._pushTo(next); }
+    if (b.q > 0) { b.q--; this._pushThroughLink(link); }
   }
 
   _tryStartService(wsId) {
@@ -260,18 +279,16 @@ export class Engine {
   _onServiceDone(wsId) {
     const ws = this.workstations.get(wsId); if (ws && ws.busy > 0) ws.busy--;
     this._tryStartService(wsId);
-    const next = this._firstNext(wsId); if (next) this._pushTo(next);
+    const link = this._findFirstLink(wsId); if (link) this._pushThroughLink(link);
     for (const from of (this.rev.get(wsId) || [])) {
       if (this.buffers.has(from)) this._tryPushingFromBuffer(from);
     }
   }
 
-  // ---- CONTROL LOOP ----
   start() {
     if (this.running) return;
     this.running = true;
     const realTickMs = 50, simStepSec = 1;
-
     this._tickHandle = setInterval(() => {
       if (!this.running) return;
       this.simTime += simStepSec;
@@ -312,7 +329,7 @@ export class Engine {
     this.simTime = 0;
     this.running = false;
     this.metrics = { throughput: 0 };
-    for (const qc of this.quality.values()) qc.reset();
+    for (const qc of this.quality.values()) qc.reset?.();
   }
 
   applyParam(id, key, value) {
@@ -333,6 +350,11 @@ export class Engine {
       const qc = this.quality.get(id);
       if (qc) qc.rejectProb = Number(value);
     }
+    if (def.type === 'Conveyor') {
+      const c = this.conveyors.get(id);
+      if (c && (key === 'length' || key === 'Length')) c.length = Number(value);
+      if (c && (key === 'speed'  || key === 'Speed'))  c.speed  = Number(value);
+    }
   }
 
   _emitState() {
@@ -341,6 +363,7 @@ export class Engine {
     for (const [id, w] of this.workstations.entries()) components[id] = { type:'Workstation', busy:w.busy, m:w.m, inQ:w.inQ };
     for (const [id, q] of this.quality.entries()) components[id] = { ...(components[id]||{}), type:'QualityCheck', ok:q.stats.ok, nok:q.stats.nok };
     for (const [id, r] of this.reworks.entries()) components[id] = { ...(components[id]||{}), type:'Rework', completed:r.completed };
+    for (const [id, c] of this.conveyors.entries()) components[id] = { ...(components[id]||{}), type:'Conveyor', length:c.length, speed:c.speed };
     this.onState({ simTime: this.simTime, running: this.running, components });
   }
 
