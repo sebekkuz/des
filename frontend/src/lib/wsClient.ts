@@ -6,28 +6,18 @@ type Cbs = {
   onMetric?: (m:any)=>void;
   onLog?: (m:any)=>void;
   onError?: (m:any)=>void;
-  onOpenChange?: (online:boolean)=>void;
 };
 
 export class WsClient {
   ws: WebSocket | null = null;
   cbs: Cbs;
-  backoff = 500;
-  timer: any = null;
   constructor(cbs: Cbs = {}) { this.cbs = cbs; }
   connect() {
-    if (this.ws) try { this.ws.close(); } catch {}
+    if (this.ws) { try { this.ws.close(); } catch {} }
     const ws = new WebSocket(WS_URL);
     this.ws = ws;
-    ws.onopen = () => { this.backoff = 500; this.cbs.onOpenChange?.(true); console.log('[WS] open'); };
-    ws.onclose = () => {
-      this.cbs.onOpenChange?.(false);
-      console.log('[WS] close');
-      if (!document.hidden) {
-        this.timer = setTimeout(()=> this.connect(), this.backoff);
-        this.backoff = Math.min(this.backoff * 2, 5000);
-      }
-    };
+    ws.onopen = () => { console.log('[WS] open'); };
+    ws.onclose = () => { console.log('[WS] close'); };
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
@@ -37,9 +27,5 @@ export class WsClient {
         else if (msg.type === 'ERROR')  this.cbs.onError?.(msg);
       } catch {}
     };
-  }
-  reconnect() {
-    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
-    this.connect();
   }
 }
