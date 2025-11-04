@@ -1,7 +1,7 @@
+
 // backend/src/sim/engine.js
 import { EventQueue } from './eventQueue.js';
 
-// Proste PRNG na bazie seed (dla deterministyczności metryk)
 function mulberry32(seed) {
   let t = seed >>> 0;
   return function () {
@@ -12,7 +12,6 @@ function mulberry32(seed) {
   };
 }
 
-// Sampling rozkładów
 function sampleDist(dist, rng) {
   if (!dist || !dist.type) return 0;
   const u = rng();
@@ -47,28 +46,23 @@ export class Engine {
     this.onError = callbacks.onError || (() => {});
 
     this.eq = new EventQueue();
-    this.simTime = 0; // s
+    this.simTime = 0;
     this.running = false;
     this._tickHandle = null;
 
-    // model / KPI
     this.model = null;
     this.stopAt = null;
     this.rng = Math.random;
-    this.metrics = {
-      throughput: 0, // ile dotarło do SNK
-    };
+    this.metrics = { throughput: 0 };
 
-    // Struktury modelu
-    this.defs = new Map(); // id -> definicja
-    this.links = []; // {from,to}
-    this.adj = new Map(); // from -> [to]
-    this.rev = new Map(); // to   -> [from]
+    this.defs = new Map();
+    this.links = [];
+    this.adj = new Map();
+    this.rev = new Map();
     this.sinks = new Set();
-    this.generators = []; // {id, interarrivalDist}
+    this.generators = [];
 
-    // Stan komponentów
-    this.buffers = new Map(); // id -> {cap,q}
+    this.buffers = new Map();      // id -> {cap,q}
     this.workstations = new Map(); // id -> {busy,m,svcDist,inQ}
   }
 
@@ -85,23 +79,17 @@ export class Engine {
 
     const define = this.model?.define || {};
     const links = Array.isArray(this.model?.links) ? this.model.links : [];
-    this.links = links.map((l) => ({ from: String(l.from), to: String(l.to) }));
+    this.links = links.map(l => ({ from: String(l.from), to: String(l.to) }));
 
-    // indeksy grafu
-    this.adj.clear();
-    this.rev.clear();
-    this.defs.clear();
-    for (const [id, def] of Object.entries(define)) {
-      this.defs.set(id, def);
-    }
-    for (const { from, to } of this.links) {
+    this.adj.clear(); this.rev.clear(); this.defs.clear();
+    for (const [id, def] of Object.entries(define)) this.defs.set(id, def);
+    for (const {from,to} of this.links) {
       if (!this.adj.has(from)) this.adj.set(from, []);
       this.adj.get(from).push(to);
       if (!this.rev.has(to)) this.rev.set(to, []);
       this.rev.get(to).push(from);
     }
 
-    // komponenty
     this.sinks.clear();
     this.buffers.clear();
     this.workstations.clear();
@@ -120,164 +108,100 @@ export class Engine {
       }
     }
 
-    // generatory
     this.generators = [];
     for (const [id, def] of Object.entries(define)) {
       if (String(def.type) !== 'EntityGenerator') continue;
       const inputs = def.inputs || {};
       const it = inputs.InterarrivalTime;
       const inter = it && it.dist ? it.dist : 1;
-
       if (!this._hasPathToSink(id)) {
-        this.onLog({
-          level: 'warn',
-          msg: `Generator ${id} nie ma ścieżki do SNK (pomijam w MVP)`,
-          at: Date.now(),
-        });
+        this.onLog({ level: 'warn', msg: `Generator ${id} nie ma ścieżki do SNK`, at: Date.now() });
         continue;
       }
       this.generators.push({ id, interarrivalDist: inter });
     }
 
-    // startowe zdarzenia
     this.eq = new EventQueue();
     for (const g of this.generators) {
       const t = sampleDist(g.interarrivalDist, this.rng);
       this.eq.push(t, () => this._onArrival(g));
     }
 
-    this.onLog({
-      level: 'info',
-      msg: `Model loaded. Generators: ${this.generators.length}, stopAt=${this.stopAt}s`,
-      at: Date.now(),
-    });
+    this.onLog({ level: 'info', msg: `Model loaded. Generators: ${this.generators.length}, stopAt=${this.stopAt}s`, at: Date.now() });
     this._emitState();
   }
 
   _hasPathToSink(startId) {
-    const stack = [startId];
-    const seen = new Set();
+    const stack = [startId]; const seen = new Set();
     while (stack.length) {
-      const cur = stack.pop();
-      if (!cur || seen.has(cur)) continue;
-      seen.add(cur);
+      const cur = stack.pop(); if (!cur || seen.has(cur)) continue; seen.add(cur);
       if (this.sinks.has(cur)) return true;
-      const nxt = this.adj.get(cur) || [];
-      for (const n of nxt) stack.push(n);
+      const nxt = this.adj.get(cur) || []; for (const n of nxt) stack.push(n);
     }
     return false;
   }
 
-  // --- RUCH JEDNOSTEK ---
-
-  // przybycie z generatora
+  // flow
   _onArrival(g) {
     const next = this._firstNext(g.id);
     if (next) this._pushTo(next);
-
     const dt = sampleDist(g.interarrivalDist, this.rng);
     this.eq.push(this.simTime + dt, () => this._onArrival(g));
   }
 
-  // wstaw do komponentu id
   _pushTo(id) {
-    const def = this.defs.get(id);
-    if (!def) return;
+    const def = this.defs.get(id); if (!def) return;
     const type = String(def.type);
 
     if (type === 'EntitySink') {
       this.metrics.throughput += 1;
       return;
     }
-
     if (type === 'Buffer') {
-      const b = this.buffers.get(id);
-      const cap = b?.cap ?? Infinity;
+      const b = this.buffers.get(id); const cap = b?.cap ?? Infinity;
       if (b) {
-        if (b.q < cap) {
-          b.q++;
-          this._tryPushingFromBuffer(id);
-        } else {
-          this.onLog({
-            level: 'warn',
-            msg: `Buffer ${id} full (q=${b.q}/${cap})`,
-            at: Date.now(),
-          });
-        }
+        if (b.q < cap) { b.q++; this._tryPushingFromBuffer(id); }
+        else this.onLog({ level:'warn', msg:`Buffer ${id} full (q=${b.q}/${cap})`, at:Date.now() });
       } else {
-        // brak stanu bufora -> przelotowo
-        const next = this._firstNext(id);
-        if (next) this._pushTo(next);
+        const next = this._firstNext(id); if (next) this._pushTo(next);
       }
       return;
     }
-
     if (type === 'Workstation') {
-      const ws = this.workstations.get(id);
-      if (!ws) return;
-      ws.inQ++;
-      this._tryStartService(id);
-      return;
+      const ws = this.workstations.get(id); if (!ws) return;
+      ws.inQ++; this._tryStartService(id); return;
     }
-
-    // inne typy (na razie przelotowo)
-    const next = this._firstNext(id);
-    if (next) this._pushTo(next);
+    const next = this._firstNext(id); if (next) this._pushTo(next);
   }
 
-  // wypychaj z bufora do następnego
   _tryPushingFromBuffer(bufId) {
-    const b = this.buffers.get(bufId);
-    if (!b || b.q <= 0) return;
-    const next = this._firstNext(bufId);
-    if (!next) return;
-
-    const defNext = this.defs.get(next);
-    if (!defNext) return;
+    const b = this.buffers.get(bufId); if (!b || b.q <= 0) return;
+    const next = this._firstNext(bufId); if (!next) return;
+    const defNext = this.defs.get(next); if (!defNext) return;
     const tNext = String(defNext.type);
-
     if (tNext === 'Workstation') {
-      const ws = this.workstations.get(next);
-      if (!ws) return;
+      const ws = this.workstations.get(next); if (!ws) return;
       const slotsFree = Math.max(ws.m - ws.busy, 0);
-      if (slotsFree > 0 && b.q > 0) {
-        b.q--;
-        ws.inQ++;
-        this._tryStartService(next);
-      }
+      if (slotsFree > 0 && b.q > 0) { b.q--; ws.inQ++; this._tryStartService(next); }
       return;
     }
-
-    // przelotowo
-    if (b.q > 0) {
-      b.q--;
-      this._pushTo(next);
-    }
+    if (b.q > 0) { b.q--; this._pushTo(next); }
   }
 
-  // start obsługi w WS
   _tryStartService(wsId) {
-    const ws = this.workstations.get(wsId);
-    if (!ws) return;
+    const ws = this.workstations.get(wsId); if (!ws) return;
     while (ws.inQ > 0 && ws.busy < ws.m) {
-      ws.inQ--;
-      ws.busy++;
+      ws.inQ--; ws.busy++;
       const dt = sampleDist(ws.svcDist, this.rng) || 0;
       this.eq.push(this.simTime + dt, () => this._onServiceDone(wsId));
     }
   }
 
-  // koniec obsługi w WS
   _onServiceDone(wsId) {
-    const ws = this.workstations.get(wsId);
-    if (ws && ws.busy > 0) ws.busy--;
-    // uruchom kolejne w WS
+    const ws = this.workstations.get(wsId); if (ws && ws.busy > 0) ws.busy--;
     this._tryStartService(wsId);
-    // wyślij dalej
-    const next = this._firstNext(wsId);
-    if (next) this._pushTo(next);
-    // jeśli poprzedzał bufor – spróbuj też wypchnąć z bufora (zwolniło się miejsce)
-    for (const from of this.rev.get(wsId) || []) {
+    const next = this._firstNext(wsId); if (next) this._pushTo(next);
+    for (const from of (this.rev.get(wsId) || [])) {
       if (this.buffers.has(from)) this._tryPushingFromBuffer(from);
     }
   }
@@ -287,21 +211,15 @@ export class Engine {
     return arr.length ? arr[0] : null;
   }
 
-  // --- sterowanie pętlą DES ---
-
   start() {
     if (this.running) return;
     this.running = true;
-
-    const realTickMs = 50; // zegar rzeczywisty
-    const simStepSec = 1;  // krok czasu symulacji
+    const realTickMs = 50, simStepSec = 1;
 
     this._tickHandle = setInterval(() => {
       if (!this.running) return;
-
       this.simTime += simStepSec;
 
-      // wykonaj wszystkie zdarzenia o czasie <= simTime
       while (true) {
         const next = this.eq.peekTime();
         if (next == null || next > this.simTime) break;
@@ -314,11 +232,11 @@ export class Engine {
 
       if (this.simTime >= this.stopAt) {
         this.pause();
-        this.onLog({ level: 'info', msg: `Stop condition reached (t=${this.simTime}s)`, at: Date.now() });
+        this.onLog({ level:'info', msg:`Stop condition reached (t=${this.simTime}s)`, at:Date.now() });
       }
     }, realTickMs);
 
-    this.onLog({ level: 'info', msg: 'Simulation started', at: Date.now() });
+    this.onLog({ level:'info', msg:'Simulation started', at:Date.now() });
     this._emitState();
   }
 
@@ -327,7 +245,7 @@ export class Engine {
     this.running = false;
     if (this._tickHandle) clearInterval(this._tickHandle);
     this._tickHandle = null;
-    this.onLog({ level: 'info', msg: 'Simulation paused', at: Date.now() });
+    this.onLog({ level:'info', msg:'Simulation paused', at:Date.now() });
     this._emitState();
   }
 
@@ -340,14 +258,35 @@ export class Engine {
     this.metrics = { throughput: 0 };
   }
 
+  // runtime param update (MVP)
+  applyParam(id, key, value) {
+    const def = this.defs.get(id);
+    if (!def) throw new Error(`Unknown component: ${id}`);
+    def.inputs = def.inputs || {};
+    def.inputs[key] = value;
+
+    if (def.type === 'Buffer' && key === 'Capacity') {
+      const b = this.buffers.get(id);
+      if (b) b.cap = Number(value);
+    }
+    if (def.type === 'Workstation' && key === 'ServiceTime') {
+      const ws = this.workstations.get(id);
+      if (ws) ws.svcDist = value?.dist || value || ws.svcDist;
+    }
+  }
+
   _emitState() {
-    this.onState({ simTime: this.simTime, running: this.running });
+    const components = {};
+    for (const [id, b] of this.buffers.entries()) {
+      components[id] = { type:'Buffer', q:b.q, cap:b.cap };
+    }
+    for (const [id, w] of this.workstations.entries()) {
+      components[id] = { type:'Workstation', busy:w.busy, m:w.m, inQ:w.inQ };
+    }
+    this.onState({ simTime: this.simTime, running: this.running, components });
   }
 
   _emitMetrics() {
-    const series = [
-      { name: 'throughput_cum', t: this.simTime, v: this.metrics.throughput },
-    ];
-    this.onMetric(series);
+    this.onMetric([{ name:'throughput_cum', t:this.simTime, v:this.metrics.throughput }]);
   }
 }
