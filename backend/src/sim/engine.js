@@ -124,7 +124,7 @@ export class Engine {
       if (type === 'Workstation') {
         const svcDist = inputs.ServiceTime?.dist || inputs.ServiceTime || null;
         const m = Number(inputs.m ?? 1);
-        this.workstations.set(id, { busy: 0, m, svcDist, inQ: 0 };
+        this.workstations.set(id, { busy: 0, m, svcDist, inQ: 0 });
       }
       if (type === 'QualityCheck') this.quality.set(id, new QualityCheck(inputs));
       if (type === 'Rework') this.reworks.set(id, new Rework(inputs));
