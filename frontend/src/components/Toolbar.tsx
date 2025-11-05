@@ -1,13 +1,37 @@
+// frontend/src/components/Toolbar.tsx
 import React from "react";
-import { apiStart, apiPause, apiReset, apiLoadModel } from "../lib/modelIO";
+
+const HTTP_URL = import.meta.env.VITE_BACKEND_HTTP_URL;
+
+async function apiLoadModel() {
+  const ta = document.getElementById("model-editor") as HTMLTextAreaElement | null;
+  const body = ta?.value?.trim() || "";
+  if (!body) { alert("Model text is empty"); return; }
+  const res = await fetch(`${HTTP_URL}/api/load`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body
+  });
+  if (!res.ok) {
+    let txt = "";
+    try { txt = JSON.stringify(await res.json()); } catch {}
+    throw new Error(`/api/load failed ${res.status} ${txt}`);
+  }
+  alert("Model loaded ✔");
+}
+
+async function post(path: string) {
+  const res = await fetch(`${HTTP_URL}${path}`, { method: "POST" });
+  if (!res.ok) throw new Error(`${path} failed ${res.status}`);
+}
 
 export default function Toolbar() {
   return (
-    <div className="toolbar">
+    <div style={{ display: "flex", gap: 8, padding: 8, borderBottom: "1px solid #eee" }}>
       <button onClick={apiLoadModel}>Load model</button>
-      <button onClick={apiStart}>Start</button>
-      <button onClick={apiPause}>Pause</button>
-      <button onClick={apiReset}>Reset</button>
+      <button onClick={() => post("/api/start")}>Start</button>
+      <button onClick={() => post("/api/pause")}>Pause</button>
+      <button onClick={() => post("/api/reset")}>Reset</button>
     </div>
   );
 }
