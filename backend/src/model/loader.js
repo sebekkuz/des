@@ -1,12 +1,8 @@
-import { parse as parseYaml } from 'yaml';
-import { ModelSchema } from './schema.js';
-
-// Load a model definition from JSON or YAML.  Accepts either a string
-// (via body parser) or an object.  Validates against the shared
-// schema.  Throws on error.
-
-// backend/src/model/loader.js
-// Na razie: minimalny loader. (Możesz dodać walidację później.)
+// backend/src/model/loader.js (Patch 1: relaxed validation)
+/**
+ * Minimal loader: sprawdza podstawowe sekcje i zwraca model bez ingerencji.
+ * W kolejnych etapach można tu podpiąć Zod/JSON Schema.
+ */
 export function loadModel(input) {
   if (!input || typeof input !== 'object') {
     throw new Error('Model must be an object (JSON/YAML).');
@@ -17,6 +13,6 @@ export function loadModel(input) {
   if (!Array.isArray(input.links)) {
     throw new Error('Model missing "links" array.');
   }
-  // Można dodać normalizacje itd. Na teraz — zwróć jak jest.
+  // Możliwe miejsce na normalizacje/konwersje, np. strings->numbers.
   return input;
 }
