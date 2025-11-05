@@ -15,9 +15,9 @@ app.use(cors({
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
 }));
-const app = express();
-app.use(express.json());
 
+app.use(express.json());
+app.use('/api', buildApiRouter(engine));
 // In-memory model and engine instance.  For a real deployment, consider
 // supporting multiple concurrent simulations identified by ID.
 let engine = null;
