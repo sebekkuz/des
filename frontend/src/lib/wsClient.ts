@@ -1,35 +1,39 @@
 
-import { WS_URL } from './config';
+import { useModelStore } from '../store/useModelStore'
 
-type Cbs = {
-  onState?: (m:any)=>void;
-  onMetric?: (m:any)=>void;
-  onLog?: (m:any)=>void;
-  onError?: (m:any)=>void;
-  onEntityMove?: (m:any)=>void;
-};
+export function connectWS() {
+  const url = import.meta.env.VITE_BACKEND_WS_URL
+  if (!url) {
+    console.error('VITE_BACKEND_WS_URL is not defined')
+    return () => {}
+  }
+  const pushLog = useModelStore.getState().pushLog
+  const setSim = useModelStore.getState().setSim
+  const setComponents = useModelStore.getState().setComponents
+  const pushMetrics = useModelStore.getState().pushMetrics
 
-export class WsClient {
-  ws: WebSocket | null = null;
-  cbs: Cbs;
-  constructor(cbs: Cbs = {}) {
-    this.cbs = cbs;
+  const ws = new WebSocket(url)
+  ws.onopen = () => { console.log('[WS] open'); pushLog('[WS] open') }
+  ws.onclose = () => { console.log('[WS] close'); pushLog('[WS] close') }
+  ws.onerror = (e) => { console.error('[WS] error', e); pushLog('[WS] error') }
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data)
+      switch (msg.type) {
+        case 'HELLO': pushLog('HELLO: ' + (msg.msg || '')); break
+        case 'LOG':   pushLog(`[${new Date(msg.at||Date.now()).toISOString()}] ${msg.msg}`); break
+        case 'STATE':
+          if (typeof msg.simTime === 'number') setSim(msg.simTime, !!msg.running)
+          if (msg.components) setComponents(msg.components)
+          break
+        case 'METRIC':
+          if (Array.isArray(msg.series)) pushMetrics(msg.series)
+          break
+        default: break
+      }
+    } catch (e) {
+      console.error('WS parse error', e)
+    }
   }
-  connect() {
-    if (this.ws) try { this.ws.close(); } catch {}
-    const ws = new WebSocket(WS_URL);
-    this.ws = ws;
-    ws.onopen = () => { console.log('[WS] open'); };
-    ws.onclose = () => { console.log('[WS] close'); };
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'STATE')        this.cbs.onState?.(msg);
-        else if (msg.type === 'METRIC')  this.cbs.onMetric?.(msg);
-        else if (msg.type === 'LOG')     this.cbs.onLog?.(msg);
-        else if (msg.type === 'ERROR')   this.cbs.onError?.(msg);
-        else if (msg.type === 'ENTITY_MOVE') this.cbs.onEntityMove?.(msg);
-      } catch {}
-    };
-  }
+  return () => ws.close()
 }

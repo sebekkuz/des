@@ -1,63 +1,35 @@
-import React from 'react';
-import { Line } from 'react-chartjs-2';
+
+import React, { useMemo } from 'react'
+import { Line } from 'react-chartjs-2'
 import {
-  Chart as ChartJS,
-  LineElement,
-  PointElement,
-  CategoryScale,
-  LinearScale,
-  Legend,
-  Tooltip,
-} from 'chart.js';
+  Chart as ChartJS, LineElement, PointElement, CategoryScale, LinearScale, Legend, Tooltip
+} from 'chart.js'
+import { useModelStore } from '../store/useModelStore'
 
-ChartJS.register(LineElement, PointElement, CategoryScale, LinearScale, Legend, Tooltip);
+ChartJS.register(LineElement, PointElement, CategoryScale, LinearScale, Legend, Tooltip)
 
-interface OutputPanelProps {
-  logs: string[];
-  metrics: { name: string; t: number; v: number }[];
-}
+export default function OutputPanel(){
+  const logs = useModelStore(s=>s.logs)
+  const series = useModelStore(s=>s.series)
 
-// OutputPanel displays simulation logs and a simple line chart of metrics.
-const OutputPanel: React.FC<OutputPanelProps> = ({ logs, metrics }) => {
-  // Prepare chart data from metrics
-  const labels = metrics.map((m) => m.t);
-  const dataValues = metrics.map((m) => m.v);
-  const chartData = {
-    labels,
-    datasets: [
-      {
-        label: metrics.length > 0 ? metrics[0].name : 'metric',
-        data: dataValues,
-        fill: false,
-        tension: 0.1,
-      },
-    ],
-  };
-
-  const options = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-    },
-    scales: {
-      x: { title: { display: true, text: 'Time' } },
-      y: { title: { display: true, text: 'Value' } },
-    },
-  } as const;
+  const data = useMemo(()=>{
+    const labels = Object.values(series)[0]?.t?.map(v=>v.toFixed(0)) || []
+    const ds = Object.entries(series).map(([name,arr])=>({
+      label: name, data: arr.v, tension: 0.2, fill: false
+    }))
+    return { labels, datasets: ds }
+  }, [series])
 
   return (
-    <div style={{ display: 'flex', height: '100%' }}>
-      <div style={{ flex: 1, paddingRight: '1rem', overflowY: 'auto' }}>
-        <h4>Logs</h4>
-        <pre style={{ whiteSpace: 'pre-wrap' }}>{logs.join('\n')}</pre>
+    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, padding:8}}>
+      <div style={{border:'1px solid #e5e7eb', borderRadius:12, padding:12}}>
+        <div style={{fontWeight:600, marginBottom:8}}>Metrics</div>
+        <Line data={data} />
       </div>
-      <div style={{ flex: 1, position: 'relative', height: '100%' }}>
-        <h4>Metrics</h4>
-        <Line data={chartData} options={options} />
+      <div style={{border:'1px solid #e5e7eb', borderRadius:12, padding:12, maxHeight:280, overflow:'auto'}}>
+        <div style={{fontWeight:600, marginBottom:8}}>Logs</div>
+        <pre style={{whiteSpace:'pre-wrap', margin:0}}>{logs.join('\n')}</pre>
       </div>
     </div>
-  );
-};
-
-export default OutputPanel;
+  )
+}

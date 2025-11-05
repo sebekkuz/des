@@ -1,38 +1,27 @@
-// frontend/src/components/Toolbar.tsx
-import React from "react";
 
-const HTTP_URL = import.meta.env.VITE_BACKEND_HTTP_URL;
+import React from 'react'
+import { apiLoadModel, apiStart, apiPause, apiReset } from '../lib/modelIO'
+import { useModelStore } from '../store/useModelStore'
 
-async function apiLoadModel() {
-  const ta = document.getElementById("model-editor") as HTMLTextAreaElement | null;
-  const body = ta?.value?.trim() || "";
-  if (!body) { alert("Model text is empty"); return; }
-  const res = await fetch(`${HTTP_URL}/api/load`, {
-    method: "POST",
-    // ⬇️ kluczowa zmiana:
-    headers: { "Content-Type": "text/plain" },
-    body // surowy tekst, JSON lub YAML
-  });
-  if (!res.ok) {
-    let txt = "";
-    try { txt = JSON.stringify(await res.json()); } catch {}
-    throw new Error(`/api/load failed ${res.status} ${txt}`);
+export default function Toolbar(){
+  const running = useModelStore(s=>s.running)
+  const simTime = useModelStore(s=>s.simTime)
+
+  const onLoad = async () => {
+    const ta = document.getElementById('model-editor') as HTMLTextAreaElement | null
+    if(!ta) return alert('Editor not found')
+    try {
+      await apiLoadModel(ta.value)
+      alert('Model loaded ✔')
+    } catch(e:any){ alert('Load failed\n'+(e?.message||e)) }
   }
-  alert("Model loaded ✔");
-}
-
-async function post(path: string) {
-  const res = await fetch(`${HTTP_URL}${path}`, { method: "POST" });
-  if (!res.ok) throw new Error(`${path} failed ${res.status}`);
-}
-
-export default function Toolbar() {
   return (
-    <div style={{ display: "flex", gap: 8, padding: 8, borderBottom: "1px solid #eee" }}>
-      <button onClick={apiLoadModel}>Load model</button>
-      <button onClick={() => post("/api/start")}>Start</button>
-      <button onClick={() => post("/api/pause")}>Pause</button>
-      <button onClick={() => post("/api/reset")}>Reset</button>
+    <div style={{display:'flex', gap:8, padding:8, borderBottom:'1px solid #e5e7eb', alignItems:'center'}}>
+      <button onClick={onLoad}>Load model</button>
+      <button onClick={()=>apiStart().catch(e=>alert(e))}>Start</button>
+      <button onClick={()=>apiPause().catch(e=>alert(e))}>Pause</button>
+      <button onClick={()=>apiReset().catch(e=>alert(e))}>Reset</button>
+      <div style={{marginLeft:'auto', color:'#555'}}>t={simTime.toFixed(1)}s · {running? 'RUNNING':'PAUSED'}</div>
     </div>
-  );
+  )
 }

@@ -1,15 +1,9 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
 
-// Basic Vite configuration for React 18.  The app uses ESM modules
-// and does not rely on any global variables.  Additional plugins can
-// be configured here as needed.
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
 export default defineConfig({
   plugins: [react()],
-  server: {
-    port: 5173
-  },
-  build: {
-    outDir: 'dist'
-  }
-});
+  server: { port: 5173, host: true },
+  build: { sourcemap: false }
+})

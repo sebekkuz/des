@@ -1,12 +1,27 @@
 
-import React from 'react';
-import { useModelStore } from '../store/useModelStore';
+import React from 'react'
+
 export default function TextEditor(){
-  const text=useModelStore(s=>s.modelText);
-  const setText=useModelStore(s=>s.setModelText);
-  return (<div style={{padding:8, borderTop:'1px solid #eee'}}>
-    <b>Model (JSON or YAML)</b>
-    <textarea id="model-editor" value={text} onChange={e=>setText(e.target.value)} rows={10}
-      style={{width:'100%', fontFamily:'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace'}} />
-  </div>);
+  const sample = `{
+  "define": {
+    "SRC": { "type": "EntityGenerator", "inputs": { "InterarrivalTime": { "dist": { "type": "Exponential", "mean": 1 } } } },
+    "BUF": { "type": "Buffer", "inputs": { "Capacity": 20 } },
+    "WS1": { "type": "Workstation", "inputs": { "m": 1, "ServiceTime": { "dist": { "type": "Triangular", "min": 6, "mode": 8, "max": 12 } } } },
+    "QC":  { "type": "QualityCheck", "inputs": { "RejectProb": 0.06 } },
+    "SNK": { "type": "EntitySink" }
+  },
+  "links": [
+    { "from": "SRC", "to": "BUF" },
+    { "from": "BUF", "to": "WS1" },
+    { "from": "WS1", "to": "QC" },
+    { "from": "QC",  "to": "SNK" }
+  ],
+  "globals": { "rng": { "seed": 123 }, "stopCondition": { "time": 300 } }
+}`
+  return (
+    <div style={{padding:8}}>
+      <div style={{fontWeight:600, marginBottom:6}}>Model (JSON lub YAML)</div>
+      <textarea id="model-editor" style={{width:'100%', height:180}} defaultValue={sample} />
+    </div>
+  )
 }

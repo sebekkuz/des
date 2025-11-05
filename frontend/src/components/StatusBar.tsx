@@ -1,18 +1,21 @@
 
-import React from 'react';
+import React from 'react'
+import { useModelStore } from '../store/useModelStore'
 
-type Props = { online: boolean; env?: string; onReconnect?: () => void };
+export default function StatusBar(){
+  const running = useModelStore(s=>s.running)
+  const t = useModelStore(s=>s.simTime)
+  const online = true
 
-export default function StatusBar({ online, env, onReconnect }: Props) {
   return (
-    <div style={{ height: 28, display:'flex', alignItems:'center', gap:12, padding:'0 8px', borderBottom:'1px solid #eee', background:'#fafafa' }}>
-      <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}>
-        <span style={{ width:8, height:8, borderRadius:4, background: online ? '#16a34a' : '#ef4444' }} />
-        <b>{online ? 'ONLINE' : 'OFFLINE'}</b>
-      </span>
-      {env && <span style={{ color:'#64748b' }}>{env}</span>}
-      <div style={{ flex:1 }} />
-      <button onClick={onReconnect}>Reconnect WS</button>
+    <div style={{padding:8, borderTop:'1px solid #e5e7eb', display:'flex', gap:12}}>
+      <span style={{fontWeight:600}}>Status:</span>
+      <span>{online? 'ONLINE':'OFFLINE'}</span>
+      <span>·</span>
+      <span>t={t.toFixed(1)}s</span>
+      <span>·</span>
+      <span>{running? 'RUNNING':'PAUSED'}</span>
+      <span style={{marginLeft:'auto', color:'#667085'}}>HTTP: {import.meta.env.VITE_BACKEND_HTTP_URL} | WS: {import.meta.env.VITE_BACKEND_WS_URL}</span>
     </div>
-  );
+  )
 }
