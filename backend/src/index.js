@@ -1,3 +1,4 @@
+import buildApiRouter from './apiPatch.js';
 import express from 'express';
 import cors from 'cors';
 import http from 'http';
@@ -15,6 +16,7 @@ app.use(cors({
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
 }));
+const app = express();
 app.use(express.json());
 
 // In-memory model and engine instance.  For a real deployment, consider
