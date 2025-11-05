@@ -1,0 +1,6 @@
+{
+  "addDependencies": {
+    "cors": "2.8.5",
+    "yaml": "2.3.3"
+  }
+}
