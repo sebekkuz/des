@@ -9,8 +9,9 @@ async function apiLoadModel() {
   if (!body) { alert("Model text is empty"); return; }
   const res = await fetch(`${HTTP_URL}/api/load`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body
+    // ⬇️ kluczowa zmiana:
+    headers: { "Content-Type": "text/plain" },
+    body // surowy tekst, JSON lub YAML
   });
   if (!res.ok) {
     let txt = "";
