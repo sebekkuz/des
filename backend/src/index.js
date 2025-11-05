@@ -6,7 +6,6 @@ import { WebSocketServer } from 'ws';
 import { loadModel } from './model/loader.js';
 import { Engine } from './sim/engine.js';
 
-const app = express();
 
 // Configure CORS to only allow the frontend domain.  The domain is set via
 // environment variable FRONT_ORIGIN or defaults to the production frontend.
