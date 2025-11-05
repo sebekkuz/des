@@ -1,72 +1,81 @@
-// backend/src/index.js
-import express from "express";
-import cors from "cors";
-import { createServer } from "http";
-import { WebSocketServer } from "ws";
-import { parse as parseYaml } from "yaml";
-import { Engine } from "./sim/engine.js";
+import express from 'express';
+import cors from 'cors';
+import http from 'http';
+import { WebSocketServer } from 'ws';
+import { loadModel } from './model/loader.js';
+import { Engine } from './sim/engine.js';
 
 const app = express();
 
+// Configure CORS to only allow the frontend domain.  The domain is set via
+// environment variable FRONT_ORIGIN or defaults to the production frontend.
+const FRONT_ORIGIN = process.env.FRONT_ORIGIN || 'https://des-1-sjna.onrender.com';
 app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type"]
+  origin: FRONT_ORIGIN,
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type'],
 }));
+app.use(express.json());
 
-app.use(express.json({ limit: "2mb" }));
-app.use(express.text({ type: ["text/*","application/yaml","application/x-yaml"], limit: "2mb" }));
+// In-memory model and engine instance.  For a real deployment, consider
+// supporting multiple concurrent simulations identified by ID.
+let engine = null;
 
-const server = createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
-
-let engine = new Engine(wss);
-
-wss.on("connection", (ws) => {
-  try { ws.send(JSON.stringify({ type: "HELLO", msg: "connected" })); } catch {}
-});
-
-app.get("/api/health", (_, res) => res.json({ status: "ok" }));
-
-app.post("/api/load", async (req, res) => {
+// REST endpoints
+app.post('/api/load', (req, res) => {
   try {
-    let model = req.body;
-    if (typeof model === "string") {
-      try { model = JSON.parse(model); }
-      catch { model = parseYaml(model); }
-    }
-    if (!model || typeof model !== "object") throw new Error("Model must be an object");
-
-    try { engine.pause?.(); } catch {}
-    try { engine.reset?.(); } catch {}
-
-    if (typeof engine.load === "function") {
-      await engine.load(model);
-    } else if (typeof engine.loadModel === "function") {
-      engine.loadModel(model);
-    } else {
-      throw new Error("Engine has no load/loadModel method");
-    }
-
-    broadcast({ type: "LOG", level: "info", msg: "Model loaded", at: Date.now() });
-    res.json({ ok: true, msg: "Model loaded" });
+    const model = loadModel(req.body);
+    engine = new Engine(model);
+    res.json({ ok: true });
   } catch (err) {
-    const msg = err?.message || String(err);
-    console.error("[/api/load]", msg);
-    res.status(422).json({ ok: false, error: msg });
+    console.error(err);
+    res.status(400).json({ error: err.message });
   }
 });
 
-app.post("/api/start", (_, res) => { try { engine.start?.(); res.json({ ok: true }); } catch(e){ res.status(500).json({ ok:false, error:String(e?.message||e) }); } });
-app.post("/api/pause", (_, res) => { try { engine.pause?.(); res.json({ ok: true }); } catch(e){ res.status(500).json({ ok:false, error:String(e?.message||e) }); } });
-app.post("/api/reset", (_, res) => { try { engine.reset?.(); res.json({ ok: true }); } catch(e){ res.status(500).json({ ok:false, error:String(e?.message||e) }); } });
+app.post('/api/start', (_req, res) => {
+  if (!engine) return res.status(400).json({ error: 'No model loaded' });
+  engine.start();
+  res.json({ ok: true });
+});
 
-function broadcast(obj){
-  const msg = JSON.stringify(obj);
-  for (const c of wss.clients) {
-    try { if (c.readyState === 1) c.send(msg); } catch {}
-  }
+app.post('/api/pause', (_req, res) => {
+  if (!engine) return res.status(400).json({ error: 'No model loaded' });
+  engine.pause();
+  res.json({ ok: true });
+});
+
+app.post('/api/reset', (_req, res) => {
+  if (!engine) return res.status(400).json({ error: 'No model loaded' });
+  engine.reset();
+  res.json({ ok: true });
+});
+
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true });
+});
+
+// Create HTTP server and WS server
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+// Broadcast simulation state periodically
+function broadcastState() {
+  if (!engine) return;
+  const state = engine.getState();
+  const msg = JSON.stringify({ type: 'STATE', data: state });
+  wss.clients.forEach((client) => {
+    if (client.readyState === client.OPEN) client.send(msg);
+  });
 }
 
-const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => console.log(`✅ Backend listening on port ${PORT}`));
+setInterval(broadcastState, 1000);
+
+wss.on('connection', (ws) => {
+  ws.send(JSON.stringify({ type: 'HELLO', data: { version: '0.0.1' } }));
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Backend listening on port ${PORT}`);
+});
